@@ -1,0 +1,76 @@
+name: Flutter checks and builds
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.44.1'
+          channel: stable
+          cache: true
+      - run: flutter pub get
+      - run: dart format --output=none --set-exit-if-changed lib test integration_test
+      - run: flutter analyze
+      - run: flutter test --coverage
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: coverage/lcov.info
+
+  build:
+    needs: checks
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux
+            os: ubuntu-latest
+            command: flutter build linux --release
+            output: build/linux/x64/release/bundle/
+          - platform: windows
+            os: windows-latest
+            command: flutter build windows --release
+            output: build/windows/x64/runner/Release/
+          - platform: macos
+            os: macos-latest
+            command: flutter build macos --release
+            output: build/macos/Build/Products/Release/*.app
+          - platform: ios
+            os: macos-latest
+            command: flutter build ios --release --no-codesign
+            output: build/ios/iphoneos/Runner.app
+          - platform: android
+            os: ubuntu-latest
+            command: flutter build apk --release
+            output: build/app/outputs/flutter-apk/app-release.apk
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        if: matrix.platform == 'android'
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Install Linux development libraries
+        if: matrix.platform == 'linux'
+        run: sudo apt-get update && sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev libsecret-1-dev
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.44.1'
+          channel: stable
+          cache: true
+      - run: flutter pub get
+      - run: ${{ matrix.command }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nutshell-${{ matrix.platform }}
+          path: ${{ matrix.output }}
