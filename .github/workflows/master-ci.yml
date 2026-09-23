@@ -1,8 +1,8 @@
-name: Flutter checks and builds
+name: Master branch CI
 on:
   push:
-  pull_request:
-  workflow_dispatch:
+    branches:
+      - master
 
 permissions:
   contents: read

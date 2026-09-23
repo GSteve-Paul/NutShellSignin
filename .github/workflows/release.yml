@@ -1,0 +1,123 @@
+name: Build and publish release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+jobs:
+  validate-master-tag:
+    name: Verify tag is on master
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Check that the tagged commit is reachable from master
+        run: |
+          git fetch --no-tags origin +refs/heads/master:refs/remotes/origin/master
+          git merge-base --is-ancestor "$GITHUB_SHA" refs/remotes/origin/master
+
+  checks:
+    needs: validate-master-tag
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.44.1'
+          channel: stable
+          cache: true
+      - run: flutter pub get
+      - run: dart format --output=none --set-exit-if-changed lib test integration_test
+      - run: flutter analyze
+      - run: flutter test --coverage
+
+  build:
+    needs: checks
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux
+            os: ubuntu-latest
+            command: flutter build linux --release
+          - platform: windows
+            os: windows-latest
+            command: flutter build windows --release
+          - platform: macos
+            os: macos-latest
+            command: flutter build macos --release
+          - platform: android
+            os: ubuntu-latest
+            command: flutter build apk --release
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        if: matrix.platform == 'android'
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Install Linux development libraries
+        if: matrix.platform == 'linux'
+        run: sudo apt-get update && sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev libsecret-1-dev
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.44.1'
+          channel: stable
+          cache: true
+      - run: flutter pub get
+      - run: ${{ matrix.command }}
+      - name: Package Linux build
+        if: matrix.platform == 'linux'
+        run: tar -C build/linux/x64/release/bundle -czf "NutShellSignin-linux-x64-${GITHUB_REF_NAME}.tar.gz" .
+      - name: Package Windows build
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: Compress-Archive -Path build/windows/x64/runner/Release/* -DestinationPath "NutShellSignin-windows-x64-$env:GITHUB_REF_NAME.zip" -CompressionLevel Optimal
+      - name: Package macOS build
+        if: matrix.platform == 'macos'
+        run: ditto -c -k --sequesterRsrc --keepParent build/macos/Build/Products/Release/Runner.app "NutShellSignin-macos-${GITHUB_REF_NAME}.zip"
+      - name: Name Android APK
+        if: matrix.platform == 'android'
+        run: cp build/app/outputs/flutter-apk/app-release.apk "NutShellSignin-android-${GITHUB_REF_NAME}.apk"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nutshell-release-${{ matrix.platform }}
+          path: NutShellSignin-${{ matrix.platform }}-*
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: nutshell-release-*
+          path: release-assets
+          merge-multiple: true
+      - name: Generate checksums
+        run: cd release-assets && sha256sum * > SHA256SUMS
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          notes=$(cat <<'EOF'
+          ### Packaging notes
+
+          - The Android APK currently uses the Flutter template's development signing key; it is intended for testing, not app-store distribution.
+          - No iOS package is attached because this repository does not yet configure Apple signing.
+          - Desktop archives are CI build outputs; check the platform runtime requirements in the README.
+          EOF
+          )
+          gh release create "$GITHUB_REF_NAME" release-assets/* \
+            --verify-tag \
+            --title "NutShellSignin $GITHUB_REF_NAME" \
+            --generate-notes \
+            --notes "$notes"
