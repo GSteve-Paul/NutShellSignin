@@ -81,7 +81,14 @@ jobs:
         run: Compress-Archive -Path build/windows/x64/runner/Release/* -DestinationPath "NutShellSignin-windows-x64-$env:GITHUB_REF_NAME.zip" -CompressionLevel Optimal
       - name: Package macOS build
         if: matrix.platform == 'macos'
-        run: ditto -c -k --sequesterRsrc --keepParent build/macos/Build/Products/Release/Runner.app "NutShellSignin-macos-${GITHUB_REF_NAME}.zip"
+        run: |
+          app_path="$(find build/macos/Build/Products/Release -maxdepth 1 -type d -name '*.app' -print -quit)"
+          if [ -z "$app_path" ]; then
+            echo "No macOS .app bundle found in build/macos/Build/Products/Release" >&2
+            ls -la build/macos/Build/Products/Release
+            exit 1
+          fi
+          ditto -c -k --sequesterRsrc --keepParent "$app_path" "NutShellSignin-macos-${GITHUB_REF_NAME}.zip"
       - name: Name Android APK
         if: matrix.platform == 'android'
         run: cp build/app/outputs/flutter-apk/app-release.apk "NutShellSignin-android-${GITHUB_REF_NAME}.apk"
